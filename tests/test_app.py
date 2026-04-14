@@ -138,6 +138,20 @@ async def test_middleware_event_fires():
     assert seen == ["/api/v3/tests/gh/demo/bench"]
 
 
+async def test_ingest_rejects_naive_iso_timestamp(client):
+    """Naive ISO strings should fail loudly — no silent UTC promotion."""
+    bad = {
+        "runs": [{
+            "attributes": {"test_name": "x"},
+            "timestamp": "2026-01-01T12:00:00",  # no Z, no offset
+            "metrics": [{"name": "m", "value": 1.0}],
+        }]
+    }
+    r = await client.post("/api/v3/ingest/gh/demo/bench", json=bad)
+    assert r.status_code == 500
+    assert "naive datetime" in r.json()["error"].lower() or "tzinfo" in r.json()["error"].lower() or "timezone" in r.json()["error"].lower()
+
+
 async def test_benchzoo_shaped_end_to_end(client):
     """End-to-end exercise matching what benchzoo parsers actually emit."""
     runs = []

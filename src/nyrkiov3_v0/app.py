@@ -2,7 +2,7 @@
 benchzoo-shaped payload. DB-driven: the schemas below are authoritative."""
 import datetime
 from purejson import Document, Collection
-from extjson import ObjectId, dumps
+from extjson import ObjectId, dumps, utcnow, parse_date, to_utc, UTC
 from jsonee import JsonEE, Request, Response, HTTPError, InMemoryStore
 
 
@@ -94,7 +94,7 @@ def build_app(store=None):
             namespace=namespace,
             repo=repo,
             absolute_name=absolute,
-            installed_at=datetime.datetime.now(datetime.timezone.utc),
+            installed_at=utcnow(),
         )
         repos.insert_one(doc)
         return repos.find_one({"absolute_name": absolute})
@@ -115,11 +115,13 @@ def build_app(store=None):
         for raw in payload_runs:
             ts = raw.get("timestamp")
             if isinstance(ts, (int, float)):
-                ts = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+                ts = datetime.datetime.fromtimestamp(ts, tz=UTC)
             elif isinstance(ts, str):
-                ts = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                ts = parse_date(ts)  # strict: rejects naive ISO strings
+            elif isinstance(ts, datetime.datetime):
+                ts = to_utc(ts)
             elif ts is None:
-                ts = datetime.datetime.now(datetime.timezone.utc)
+                ts = utcnow()
 
             doc = Document(
                 repo_id=repo_doc["_id"],
@@ -149,17 +151,20 @@ def build_app(store=None):
         if "test_name" in q:
             filter_["attributes.test_name"] = q["test_name"]
 
-        def _parse_ts(s):
+        # Query-string timestamps are the one place where we accept naive input
+        # and assume UTC — it's a URL convention, documented for the caller.
+        # Everywhere else in the stack, naive datetimes fail loudly.
+        def _parse_qs_ts(s):
             dt = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=datetime.timezone.utc)
-            return dt
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
 
         ts_filter = {}
         if "since" in q:
-            ts_filter["$gte"] = _parse_ts(q["since"])
+            ts_filter["$gte"] = _parse_qs_ts(q["since"])
         if "until" in q:
-            ts_filter["$lte"] = _parse_ts(q["until"])
+            ts_filter["$lte"] = _parse_qs_ts(q["until"])
         if ts_filter:
             filter_["timestamp"] = ts_filter
 
