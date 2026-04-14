@@ -4,6 +4,8 @@ No dependency injection. Handlers are plain functions taking a Request
 and returning a Document / Collection / Response. Middleware hooks into
 named events rather than decorating handlers.
 """
+import mimetypes
+import os
 import re
 from purejson import Document, Collection
 from extjson import dumps, loads, validate, ValidationError
@@ -77,6 +79,7 @@ class JsonEE:
         self.routes = []
         self.schema_registry = dict(schema_registry or {})
         self.middleware = {e: [] for e in _EVENTS}
+        self._static_mounts = []  # list of (url_prefix, abs_directory, default_file)
 
     # --- registration ---
 
@@ -85,6 +88,37 @@ class JsonEE:
             self.routes.append(Route(method, pattern, fn, body_schema))
             return fn
         return decorator
+
+    def static(self, url_prefix, directory, index="index.html"):
+        """Serve files under `directory` at `url_prefix`. Requests matching a
+        static mount bypass the JSON route table. Path traversal is blocked."""
+        directory = os.path.abspath(directory)
+        if not url_prefix.startswith("/"):
+            url_prefix = "/" + url_prefix
+        if not url_prefix.endswith("/"):
+            url_prefix = url_prefix + "/"
+        self._static_mounts.append((url_prefix, directory, index))
+
+    def _try_static(self, method, path):
+        if method != "GET":
+            return None
+        for prefix, directory, index in self._static_mounts:
+            bare = prefix.rstrip("/")
+            if path == bare or path == prefix:
+                rel = index
+            elif path.startswith(prefix):
+                rel = path[len(prefix):]
+            else:
+                continue
+            full = os.path.abspath(os.path.join(directory, rel))
+            # Path traversal guard: the resolved path must stay inside directory.
+            if not (full == directory or full.startswith(directory + os.sep)):
+                continue
+            if not os.path.isfile(full):
+                continue
+            mime, _ = mimetypes.guess_type(full)
+            return full, mime or "application/octet-stream"
+        return None
 
     def on(self, event):
         if event not in self.middleware:
@@ -106,6 +140,21 @@ class JsonEE:
             raise RuntimeError("JsonEE v0 only handles http scope")
         method = scope["method"]
         path = scope["path"]
+
+        # Static mounts short-circuit the JSON pipeline (no middleware, no validation).
+        hit = self._try_static(method, path)
+        if hit is not None:
+            full, mime = hit
+            with open(full, "rb") as f:
+                data = f.read()
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", mime.encode())],
+            })
+            await send({"type": "http.response.body", "body": data})
+            return
+
         query = _parse_query(scope.get("query_string", b""))
         headers = {k.decode(): v.decode() for k, v in scope.get("headers", [])}
 

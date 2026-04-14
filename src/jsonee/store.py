@@ -1,85 +1,42 @@
 """Storage adapter. v0 ships an in-memory implementation with a
 FerretDB/MongoDB-shaped interface so swapping to the real DB later is
-mechanical."""
+mechanical. Query logic lives in purejson — this module is just a container
+that names a collection and hands out query access."""
 from purejson import Document, Collection
 from extjson import ObjectId
 
 
 class Store:
-    """Abstract interface. Not typed — duck-typed."""
+    """Abstract interface. Duck-typed, not statically typed."""
 
     def collection(self, name):
         raise NotImplementedError
 
 
 class _Collection:
-    """Minimal collection API: insert_one, insert_many, find, find_one, count."""
-
     def __init__(self):
-        self._docs = []
+        self._docs = Collection()
 
     def insert_one(self, doc):
-        doc = Document(dict(doc))
-        if "_id" not in doc:
-            doc["_id"] = ObjectId()
-        self._docs.append(doc)
-        return doc["_id"]
+        raw = dict(doc.data) if isinstance(doc, Document) else dict(doc)
+        if "_id" not in raw:
+            raw["_id"] = ObjectId()
+        self._docs.append(raw)
+        return raw["_id"]
 
     def insert_many(self, docs):
         return [self.insert_one(d) for d in docs]
 
     def find_one(self, filter_=None):
-        for d in self._docs:
-            if _matches(d, filter_ or {}):
-                return d
-        return None
+        return self._docs.find_one(filter_ or {})
 
     def find(self, filter_=None, sort=None, limit=None):
-        hits = [d for d in self._docs if _matches(d, filter_ or {})]
-        if sort:
-            for key, direction in reversed(list(sort.items())):
-                hits.sort(key=lambda d: _sort_key(d, key), reverse=(direction == -1))
-        if limit is not None:
-            hits = hits[:limit]
-        return Collection(hits)
+        return self._docs.query(filter_ or {}, sort=sort, limit=limit)
 
     def count(self, filter_=None):
-        return sum(1 for d in self._docs if _matches(d, filter_ or {}))
-
-
-def _sort_key(doc, path):
-    try:
-        return doc[path]
-    except (KeyError, Exception):
-        return None
-
-
-def _matches(doc, filter_):
-    for k, v in filter_.items():
-        try:
-            actual = doc[k]
-        except (KeyError, Exception):
-            return False
-        if isinstance(v, dict):
-            for op, operand in v.items():
-                if op == "$gte" and not (actual >= operand):
-                    return False
-                elif op == "$gt" and not (actual > operand):
-                    return False
-                elif op == "$lte" and not (actual <= operand):
-                    return False
-                elif op == "$lt" and not (actual < operand):
-                    return False
-                elif op == "$eq" and not (actual == operand):
-                    return False
-                elif op == "$ne" and not (actual != operand):
-                    return False
-                elif op == "$in" and actual not in operand:
-                    return False
-        else:
-            if actual != v:
-                return False
-    return True
+        if not filter_:
+            return len(self._docs.data)
+        return len(self._docs.query(filter_).data)
 
 
 class InMemoryStore(Store):
