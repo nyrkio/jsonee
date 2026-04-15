@@ -1,9 +1,18 @@
 """v0 nyrkiov3 app: two endpoints for ingest + read, in-memory store,
 benchzoo-shaped payload. DB-driven: the schemas below are authoritative."""
 import datetime
+import os
+
 from purejson import Document, Collection
 from extjson import ObjectId, dumps, utcnow, parse_date, to_utc, UTC
 from jsonee import JsonEE, Request, Response, HTTPError, InMemoryStore
+
+
+# Snapshot config defaults. Overridable via build_app(store=…) when a
+# caller wants a pre-built store (tests, pure in-memory demos).
+DEFAULT_SNAPSHOT_DIR = "/home/claude/data"
+DEFAULT_SNAPSHOT_PATH = os.path.join(DEFAULT_SNAPSHOT_DIR, "nyrkio-store.json")
+DEFAULT_SNAPSHOT_INTERVAL_S = 60.0
 
 
 SCHEMAS = {
@@ -76,8 +85,26 @@ SCHEMAS = {
 }
 
 
-def build_app(store=None, recent_cp_days=14):
-    store = store or InMemoryStore()
+def build_app(store=None, recent_cp_days=14, snapshot_path=None,
+              snapshot_interval_s=DEFAULT_SNAPSHOT_INTERVAL_S):
+    """Build the v0 nyrkio app.
+
+    - ``store``: pre-built store to use (tests, in-memory demos). Takes
+      precedence over ``snapshot_path``.
+    - ``snapshot_path``: if set (and no ``store`` passed), the default
+      in-memory store restores from this file on startup and dumps to
+      it every ``snapshot_interval_s`` seconds. Pass
+      ``DEFAULT_SNAPSHOT_PATH`` for the canonical location.
+    """
+    if store is None:
+        if snapshot_path:
+            os.makedirs(os.path.dirname(snapshot_path), exist_ok=True)
+            store = InMemoryStore(
+                snapshot_path=snapshot_path,
+                snapshot_interval_s=snapshot_interval_s,
+            )
+        else:
+            store = InMemoryStore()
     app = JsonEE(schema_registry=SCHEMAS)
     app.store = store  # attach for tests / handlers
     # Tunables that downstream tools (flyover, Slack summary) read.
