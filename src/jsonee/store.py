@@ -91,6 +91,8 @@ class InMemoryStore(Store):
         data = {name: list(coll._docs.data)
                 for name, coll in self._collections.items()}
         payload = _dumps(data)
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(payload)
