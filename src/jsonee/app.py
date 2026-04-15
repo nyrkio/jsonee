@@ -239,10 +239,19 @@ async def _send_response(send, response):
     body_obj = response.get("body")
     body_bytes = dumps(body_obj).encode() if body_obj is not None else b""
     headers = response.get("headers", {})
+    # A list value emits one header tuple per entry — needed for
+    # set-cookie, where multiple cookies on one response is legitimate.
+    hdr_tuples = []
+    for k, v in headers.items():
+        if isinstance(v, (list, tuple)):
+            for item in v:
+                hdr_tuples.append((k.encode(), str(item).encode()))
+        else:
+            hdr_tuples.append((k.encode(), str(v).encode()))
     await send({
         "type": "http.response.start",
         "status": response.get("status", 200),
-        "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+        "headers": hdr_tuples,
     })
     await send({"type": "http.response.body", "body": body_bytes})
 
