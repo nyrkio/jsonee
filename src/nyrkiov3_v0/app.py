@@ -76,10 +76,20 @@ SCHEMAS = {
 }
 
 
-def build_app(store=None):
+def build_app(store=None, recent_cp_days=14):
     store = store or InMemoryStore()
     app = JsonEE(schema_registry=SCHEMAS)
     app.store = store  # attach for tests / handlers
+    # Tunables that downstream tools (flyover, Slack summary) read.
+    # `recent_cp_days` is the "recent window": any commit within that many
+    # days of now() is interesting enough to visit in the daily scan even
+    # if it carries no change points; older commits only surface when they
+    # do have CPs.
+    app.config = {"recent_cp_days": recent_cp_days}
+
+    @app.route("GET", "/api/v3/config")
+    def get_config(request: Request):
+        return Document(app.config)
 
     repos = store.collection("repos")
     runs = store.collection("test_runs")
