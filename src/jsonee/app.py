@@ -218,11 +218,66 @@ class JsonEE:
             await _send_error(send, 500, f"internal error: {e}")
 
 
+class _QueryDict:
+    """Dict-like view over a URL query string that preserves
+    multi-valued parameters.
+
+    Scalar access (``q[k]`` / ``q.get(k)``) returns the **first**
+    value for ``k`` — matches the single-value handlers we had
+    before and keeps existing callers unchanged. ``q.getall(k)``
+    returns every value for ``k`` (empty list if the key is absent)
+    and is the right accessor for checkbox-style filter dims where
+    the browser sends ``?k=a&k=b``. Iteration / ``.items()`` yield
+    each distinct key exactly once, in first-occurrence order.
+    """
+    __slots__ = ("_pairs", "_first")
+
+    def __init__(self, pairs):
+        self._pairs = list(pairs)
+        self._first: dict = {}
+        for k, v in self._pairs:
+            self._first.setdefault(k, v)
+
+    def __getitem__(self, k):
+        return self._first[k]
+
+    def __contains__(self, k):
+        return k in self._first
+
+    def __iter__(self):
+        return iter(self._first)
+
+    def __len__(self):
+        return len(self._first)
+
+    def __bool__(self):
+        return bool(self._first)
+
+    def __repr__(self):
+        return f"_QueryDict({self._pairs!r})"
+
+    def get(self, k, default=None):
+        return self._first.get(k, default)
+
+    def getall(self, k):
+        return [v for (kk, v) in self._pairs if kk == k]
+
+    def items(self):
+        return self._first.items()
+
+    def keys(self):
+        return self._first.keys()
+
+    def values(self):
+        return self._first.values()
+
+
 def _parse_query(qs_bytes):
-    out = {}
     if not qs_bytes:
-        return out
+        return _QueryDict([])
     s = qs_bytes.decode() if isinstance(qs_bytes, bytes) else qs_bytes
+    from urllib.parse import unquote_plus
+    pairs = []
     for part in s.split("&"):
         if not part:
             continue
@@ -230,9 +285,8 @@ def _parse_query(qs_bytes):
             k, v = part.split("=", 1)
         else:
             k, v = part, ""
-        from urllib.parse import unquote
-        out[unquote(k)] = unquote(v)
-    return out
+        pairs.append((unquote_plus(k), unquote_plus(v)))
+    return _QueryDict(pairs)
 
 
 async def _send_response(send, response):
