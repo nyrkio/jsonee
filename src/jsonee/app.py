@@ -20,18 +20,47 @@ class HTTPError(Exception):
 
 
 class Request(Document):
-    """Document with method / path / path_params / query / headers / body."""
+    """Document with method / path / path_params / query / headers / body.
+
+    Handlers accumulate human-readable messages via add_message():
+
+        request.add_message("warn", "falling back to cached data")
+
+    These appear in the response envelope's ``_messages`` list.
+    """
+
+    def add_message(self, level, text, **extra):
+        """Append a message to this request's message list.
+
+        level — one of "debug", "info", "warn", "error", "critical".
+        text  — human-readable string shown in the browser.
+        extra — any additional fields (e.g. code="PARSE_FAILED").
+        """
+        msg = {"level": level, "text": text}
+        msg.update(extra)
+        self.setdefault("_messages", [])
+        self["_messages"].append(msg)
 
 
 class Response(Document):
-    """Document with status / headers / body. body is a Document/Collection/None."""
+    """Document with status / headers / body / optional _links.
 
-    def __init__(self, body=None, status=200, headers=None):
+    body     — the payload (dict, list, or None).
+    status   — HTTP status code (default 200).
+    headers  — HTTP response headers dict.
+    _links   — optional extra links merged into the envelope's _links
+               section. Use to add an "html" link or other relations:
+               Response(body=data, _links={"html": {"href": "/dashboard/..."}})
+    """
+
+    def __init__(self, body=None, status=200, headers=None, _links=None):
         super().__init__(
             status=status,
             headers=headers or {"content-type": "application/json"},
             body=body,
         )
+        if _links:
+            self["_links"] = _links
 
 
 def _compile_path(pattern):
@@ -88,6 +117,23 @@ class JsonEE:
             self.routes.append(Route(method, pattern, fn, body_schema))
             return fn
         return decorator
+
+    def mount_client(self, url_prefix="/js/lib"):
+        """Mount the jsonee.js browser client library at url_prefix.
+
+        The static/ directory sits alongside this package file, so no
+        configuration is required — the framework finds its own assets.
+        Mounted at the default /js/lib/, the client is reachable at
+        /js/lib/jsonee.js from the browser.
+
+        Returns True if the static directory was found and mounted.
+        """
+        here = os.path.dirname(os.path.abspath(__file__))
+        static_dir = os.path.join(here, "static")
+        if os.path.isdir(static_dir):
+            self.static(url_prefix, static_dir)
+            return True
+        return False
 
     def static(self, url_prefix, directory, index="index.html"):
         """Serve files under `directory` at `url_prefix`. Requests matching a
@@ -165,12 +211,17 @@ class JsonEE:
             body_bytes += msg.get("body", b"")
             more = msg.get("more_body", False)
 
+        qs_raw = scope.get("query_string", b"")
+        qs_str = qs_raw.decode() if isinstance(qs_raw, bytes) else qs_raw
+        self_href = path + ("?" + qs_str if qs_str else "")
+
         body = None
         if body_bytes:
             try:
                 body = loads(body_bytes.decode())
             except ValueError as e:
-                await _send_error(send, 400, f"invalid JSON: {e}")
+                await _send_error(send, 400, f"invalid JSON: {e}",
+                                  self_href=self_href)
                 return
 
         request = Request(
@@ -180,12 +231,13 @@ class JsonEE:
             query=query,
             headers=headers,
             body=body,
+            _messages=[],
         )
 
+        route = None
         try:
             self._fire("before_request", request)
 
-            route = None
             for r in self.routes:
                 params = r.match(method, path)
                 if params is not None:
@@ -209,13 +261,22 @@ class JsonEE:
             self._fire("after_handler", result)
             self._fire("before_response", result)
 
-            await _send_response(send, result)
+            await _send_response(send, result,
+                                 self_href=self_href,
+                                 docs_href=f"/jsonapi{route.pattern}",
+                                 messages=request.get("_messages") or [])
         except HTTPError as he:
             self._fire("on_error", he)
-            await _send_error(send, he.status, he.message, he.detail)
+            await _send_error(send, he.status, he.message, he.detail,
+                              self_href=self_href,
+                              docs_href=f"/jsonapi{route.pattern}" if route else "",
+                              messages=request.get("_messages") or [])
         except Exception as e:
             self._fire("on_error", e)
-            await _send_error(send, 500, f"internal error: {e}")
+            await _send_error(send, 500, f"internal error: {e}",
+                              self_href=self_href,
+                              docs_href=f"/jsonapi{route.pattern}" if route else "",
+                              messages=request.get("_messages") or [])
 
 
 class _QueryDict:
@@ -289,9 +350,38 @@ def _parse_query(qs_bytes):
     return _QueryDict(pairs)
 
 
-async def _send_response(send, response):
+def _build_envelope(data, self_href, docs_href, messages, extra_links=None):
+    """Wrap a payload in the standard JsonEE response envelope.
+
+    Every JSON response — success or error — has the same top-level shape:
+
+    {
+      "data": <payload or null>,
+      "_links": {
+        "self": {"href": "..."},
+        "docs": {"href": "/jsonapi/..."},   // route → ImplicitOpenApi
+        ...                                  // handler-supplied extras
+      },
+      "_messages": [
+        {"level": "info"|"warn"|"error"|..., "text": "..."}
+      ]
+    }
+    """
+    links = {}
+    if self_href:
+        links["self"] = {"href": self_href}
+    if docs_href:
+        links["docs"] = {"href": docs_href}
+    if extra_links:
+        links.update(extra_links)
+    return {"data": data, "_links": links, "_messages": messages or []}
+
+
+async def _send_response(send, response, *, self_href="", docs_href="", messages=None):
     body_obj = response.get("body")
-    body_bytes = dumps(body_obj).encode() if body_obj is not None else b""
+    extra_links = response.get("_links") or {}
+    envelope = _build_envelope(body_obj, self_href, docs_href, messages, extra_links)
+    body_bytes = dumps(envelope).encode()
     headers = response.get("headers", {})
     # A list value emits one header tuple per entry — needed for
     # set-cookie, where multiple cookies on one response is legitimate.
@@ -310,11 +400,14 @@ async def _send_response(send, response):
     await send({"type": "http.response.body", "body": body_bytes})
 
 
-async def _send_error(send, status, message, detail=None):
-    body = {"error": message}
+async def _send_error(send, status, message, detail=None, *,
+                      self_href="", docs_href="", messages=None):
+    error_msg = {"level": "error", "text": message}
     if detail is not None:
-        body["detail"] = detail
-    body_bytes = dumps(body).encode()
+        error_msg["detail"] = detail
+    all_messages = list(messages or []) + [error_msg]
+    envelope = _build_envelope(None, self_href, docs_href, all_messages)
+    body_bytes = dumps(envelope).encode()
     await send({
         "type": "http.response.start",
         "status": status,
