@@ -43,10 +43,17 @@ function _showMessages(messages) {
       div.setAttribute("role", "alert");
       div.textContent = m.text;
       if (m.detail) {
-        const small = document.createElement("small");
-        small.className = "d-block mt-1";
-        small.textContent = m.detail;
-        div.appendChild(small);
+        const details = document.createElement("details");
+        details.style.marginTop = "4px";
+        const summary = document.createElement("summary");
+        summary.style.cssText = "cursor:pointer;font-size:0.85em;opacity:0.75;";
+        summary.textContent = "details";
+        const pre = document.createElement("pre");
+        pre.style.cssText = "margin:6px 0 0;font-size:0.8em;white-space:pre-wrap;word-break:break-all;opacity:0.85;";
+        pre.textContent = m.detail;
+        details.appendChild(summary);
+        details.appendChild(pre);
+        div.appendChild(details);
       }
       container.appendChild(div);
     } else if (m.level === "error" || m.level === "critical") {
