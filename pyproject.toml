@@ -7,7 +7,7 @@ name = "jsonee"
 version = "0.0.1"
 description = "JSON-end-to-end ASGI framework for nyrkiov3"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["secantusdb", "pymongo"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-asyncio>=0.23", "httpx>=0.27"]
