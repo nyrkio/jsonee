@@ -165,7 +165,8 @@ class _MongoCollection:
         return [self.insert_one(d) for d in docs]
 
     def find_one(self, filter_=None):
-        return self._coll.find_one(filter_ or {})
+        raw = self._coll.find_one(filter_ or {})
+        return Document(raw) if raw is not None else None
 
     def find(self, filter_=None, sort=None, limit=None):
         kwargs = {}
@@ -177,7 +178,7 @@ class _MongoCollection:
                 kwargs["sort"] = sort
         if limit:
             kwargs["limit"] = limit
-        return list(self._coll.find(filter_ or {}, **kwargs))
+        return [Document(d) for d in self._coll.find(filter_ or {}, **kwargs)]
 
     def count(self, filter_=None):
         return self._coll.count_documents(filter_ or {})
