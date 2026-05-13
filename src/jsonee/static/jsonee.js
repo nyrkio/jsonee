@@ -63,11 +63,50 @@ function _showMessages(messages) {
 }
 
 /**
+ * Walk a decoded JSON value and materialise extjson markers into JS natives.
+ *   {"$date": "ISO"}  → Date
+ *   {"$oid":  "hex"}  → string  (OIDs are opaque in the browser)
+ *   {"$long": "n"}    → BigInt  (preserves precision beyond Number.MAX_SAFE_INTEGER)
+ * Plain values pass through unchanged, so calling this on any JSON is safe.
+ */
+export function fromExtJSON(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(fromExtJSON);
+  const keys = Object.keys(value);
+  if (keys.length === 1) {
+    if (keys[0] === "$date") return new Date(value.$date);
+    if (keys[0] === "$oid")  return value.$oid;
+    if (keys[0] === "$long") return BigInt(value.$long);
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) out[k] = fromExtJSON(v);
+  return out;
+}
+
+/**
+ * Walk a JS value and convert natives to extjson markers.
+ *   Date   → {"$date": "ISO-Z"}
+ *   BigInt → {"$long": "decimal string"}
+ */
+export function toExtJSON(value) {
+  if (value === null || value === undefined) return value;
+  if (value instanceof Date) return { "$date": value.toISOString() };
+  if (typeof value === "bigint") return { "$long": value.toString() };
+  if (Array.isArray(value)) return value.map(toExtJSON);
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = toExtJSON(v);
+    return out;
+  }
+  return value;
+}
+
+/**
  * Fetch a JsonEE API endpoint and unwrap the response envelope.
  *
- * On success returns envelope.data (the payload).
- * On failure throws an Error with .status, .detail, and .envelope set.
- * _messages from the envelope are always shown regardless of status.
+ * On success returns envelope.data with extjson markers materialised
+ * (Date, BigInt). On failure throws an Error with .status, .detail,
+ * and .envelope set. _messages are always shown regardless of status.
  *
  * @param {string} url
  * @param {RequestInit} [options]
@@ -95,5 +134,5 @@ export async function apiFetch(url, options = {}) {
     });
   }
 
-  return envelope.data;
+  return fromExtJSON(envelope.data);
 }
