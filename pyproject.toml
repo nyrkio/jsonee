@@ -8,6 +8,14 @@ version = "0.0.1"
 description = "JSON-end-to-end ASGI framework for nyrkiov3"
 requires-python = ">=3.11"
 dependencies = [
+    # The two backing data libraries. JsonEE is the platform that
+    # combines them: purejson supplies Document/Collection, extjson
+    # the BSON types + $extends schema validator. They're independent
+    # of each other (neither imports the other); JsonEE depends on both.
+    "purejson",
+    "extjson",
+    # DocumentDB layer. secantusdb is the default embedded store;
+    # pymongo is the wire client that also talks to MongoDB/FerretDB.
     "secantusdb",
     "pymongo",
     # Single-source-of-options config loader exposed via jsonee.config.
@@ -18,6 +26,9 @@ dependencies = [
     # YAML config files. PyYAML is the backend ConfigArgParse uses
     # when the config file is YAML.
     "PyYAML",
+    # ASGI server. JsonEE.start() runs uvicorn directly, so it's a
+    # runtime dependency of the platform, not the app.
+    "uvicorn",
 ]
 
 [project.optional-dependencies]

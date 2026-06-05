@@ -85,7 +85,7 @@ def create_parser(
     default_base_url
         Per-app defaults for the pre-registered options.
     """
-    prefix = app_name.upper() + "_"
+    prefix = env_prefix if env_prefix is not None else app_name.upper() + "_"
     files = default_config_files(app_name, additional_files=config_files)
     p = configargparse.ArgParser(
         prog=prog or app_name,

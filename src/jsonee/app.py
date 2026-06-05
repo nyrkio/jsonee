@@ -150,7 +150,7 @@ class JsonEE:
         ns = self.argparse.parse_args(argv)
         cfg = vars(ns).copy()
         cfg.pop("config_file", None)
-        for key in getattr(self.parser, "_jsonee_path_options", ()):
+        for key in getattr(self.argparse, "_jsonee_path_options", ()):
             if cfg.get(key):
                 cfg[key] = os.path.expanduser(cfg[key])
         self.cfg = cfg
