@@ -55,7 +55,9 @@ function _showMessages(messages) {
         details.appendChild(pre);
         div.appendChild(details);
       }
-      container.appendChild(div);
+      if (m.level != "debug") {
+        container.appendChild(div);
+      }
     } else if (m.level === "error" || m.level === "critical") {
       window.alert(`${m.level.toUpperCase()}: ${m.text}${m.detail ? "\n\n" + m.detail : ""}`);
     }

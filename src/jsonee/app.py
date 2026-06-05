@@ -4,12 +4,19 @@ No dependency injection. Handlers are plain functions taking a Request
 and returning a Document / Collection / Response. Middleware hooks into
 named events rather than decorating handlers.
 """
+import logging
 import mimetypes
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
+
+import uvicorn
+
 from purejson import Document, Collection
 from extjson import dumps, loads, validate, ValidationError
 
+from .config import create_parser
+from .store import open_store
 
 class HTTPError(Exception):
     def __init__(self, status, message, detail=None):
@@ -102,13 +109,79 @@ _EVENTS = (
     "on_error",
 )
 
+DEFERRED = None
 
 class JsonEE:
-    def __init__(self, schema_registry=None):
+    def __init__(self, app_name: str, prog: str | None = None, description: str = "", env_prefix: str | None = None, storage_path: str | None = None, mongo_db: str | None = None, bind: str = "127.0.0.1:8123", base_url: str = "", config_files: list[str] | None = None, schema_registry: dict|None = None):
+
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+        self.log = logging
+        self.app_name = app_name or "jsonee_app"
+        self.argparse = create_parser(app_name=self.app_name, prog=prog, description=description, env_prefix=env_prefix, storage_path=storage_path, mongo_db=mongo_db, bind=bind, base_url=base_url, config_files=config_files)
         self.routes = []
         self.schema_registry = dict(schema_registry or {})
         self.middleware = {e: [] for e in _EVENTS}
         self._static_mounts = []  # list of (url_prefix, abs_directory, default_file)
+        self.cfg = {"init": "CLI arguments have not been parsed yet. Please call JsonEE.parse_args()"}
+        self.app = DEFERRED
+
+
+    def parser(self):
+        return self.argparse
+
+    def parse_args(self, argv: list[str] | None = None) -> dict[str, any]:
+        """Parse argv and return a normalized config dict.
+
+        - Drops the ``config_file`` housekeeping key (it's an input to the
+          loader, not a runtime setting).
+        - Expands ``~`` in any option tagged as path-typed by
+          :func:`create_parser` (currently just ``storage_path``).
+
+        App-specific normalisation (fallback chains, derived defaults)
+        happens *after* this — apps own that logic since it depends on
+        their option set."""
+        # No config needed but kind of belongs here:
+        self.mount_client()
+
+        ns = self.argparse.parse_args(argv)
+        cfg = vars(ns).copy()
+        cfg.pop("config_file", None)
+        for key in getattr(self.parser, "_jsonee_path_options", ()):
+            if cfg.get(key):
+                cfg[key] = os.path.expanduser(cfg[key])
+        self.cfg = cfg
+        return cfg
+
+    def open_store(self):
+        self.store = open_store(storage_path=self.cfg["storage_path"], uri=self.cfg["mongo_uri"])
+        n = self.store.collection("test_runs").count()
+        store_desc = self.cfg["mongo_uri"] if self.cfg["mongo_uri"] else self.cfg["storage_path"]
+        logging.info(f"store has {n} runs ({store_desc})")
+
+
+    def start(self):
+        cfg = self.cfg
+        host, _, port = cfg["bind"].rpartition(":")
+        host = host or "127.0.0.1"
+
+        # Background executor for work that shouldn't block HTTP handlers —
+        # webhooks, periodic rebuilds, change-point detection. On Python
+        # 3.14 free-threaded these threads run concurrently with each other
+        # and with the request path; on a GIL build they still decouple the
+        # response from the work.
+        # TODO: Actually not just background work. We should be able to handle
+        #  multiple http requests in parallel. But this is an ok start.
+        self.background = ThreadPoolExecutor(
+        max_workers=self.cfg["max_workers"], thread_name_prefix=f"{self.app_name}_bg_")
+
+        print(f"listening on http://{host}:{port}  "
+              f"(base_url={self.cfg['base_url']})")
+        uvicorn.run(self, host=host, port=int(port), log_level="info")
+
 
     # --- registration ---
 
@@ -132,7 +205,9 @@ class JsonEE:
         static_dir = os.path.join(here, "static")
         if os.path.isdir(static_dir):
             self.static(url_prefix, static_dir)
+            logging.info(f"Added {static_dir} at URI {url_prefix}")
             return True
+        logging.warn(f"Failed to find {static_dir} that has jsonee.js")
         return False
 
     def static(self, url_prefix, directory, index="index.html"):
@@ -402,7 +477,10 @@ async def _send_response(send, response, *, self_href="", docs_href="", messages
 
 async def _send_error(send, status, message, detail=None, *,
                       self_href="", docs_href="", messages=None):
+    benign_errors = [401]
     error_msg = {"level": "error", "text": message}
+    if status in benign_errors:
+        error_msg["level"] = "debug"
     if detail is not None:
         error_msg["detail"] = detail
     all_messages = list(messages or []) + [error_msg]

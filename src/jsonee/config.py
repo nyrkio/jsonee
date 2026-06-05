@@ -32,8 +32,12 @@ from typing import Any
 
 import configargparse
 
+import purejson
 
-def default_config_files(app_name: str) -> list[str]:
+DEFAULT_SNAPSHOT_INTERVAL_S = 60.0
+
+
+def default_config_files(app_name: str, additional_files: list[str] = None) -> list[str]:
     """Return the standard JsonEE discovery list for ``app_name``.
 
     Exposed so callers can introspect or patch the list (tests do
@@ -41,11 +45,12 @@ def default_config_files(app_name: str) -> list[str]:
     return [
         f"/etc/{app_name}/config.yml",
         f"/etc/{app_name}/secrets.yml",
-        os.path.expanduser(f"~/.{app_name}/config.yml"),
-        os.path.expanduser(f"~/.{app_name}/secrets.yml"),
+        os.path.expanduser(f"~/.config/config.yml"),
+        os.path.expanduser(f"~/.config/secrets.yml"),
         f"./{app_name}.yml",
         f"./{app_name}-secrets.yml",
-    ]
+    ] + (additional_files if additional_files is not None else [])
+
 
 
 def create_parser(
@@ -54,12 +59,11 @@ def create_parser(
     prog: str | None = None,
     description: str = "",
     env_prefix: str | None = None,
-    with_store: bool = True,
     with_http: bool = True,
-    default_storage_path: str | None = None,
-    default_mongo_db: str | None = None,
-    default_bind: str = "127.0.0.1:8123",
-    default_base_url: str = "",
+    storage_path: str | None = "~/data",
+    mongo_db: str | None = "jsonee_app",
+    bind: str = "127.0.0.1:8123",
+    base_url: str = "/",
     config_files: list[str] | None = None,
 ) -> configargparse.ArgParser:
     """Build a JsonEE-flavoured ConfigArgParse parser.
@@ -78,19 +82,11 @@ def create_parser(
         Prefix for environment variables. Defaults to
         ``app_name.upper() + "_"`` (e.g. ``NYRKIOV3_``). Pass a custom
         value to keep an existing prefix when an app is renamed.
-    with_store, with_http
-        Toggle the two groups of pre-registered options. Set both to
-        ``False`` for a parser that only owns config-file plumbing
-        (useful for CLI tools that don't run an HTTP server).
-    default_storage_path, default_mongo_db, default_bind,
     default_base_url
         Per-app defaults for the pre-registered options.
-    config_files
-        Override the discovery list entirely. Defaults to
-        :func:`default_config_files` for ``app_name``.
     """
-    prefix = env_prefix if env_prefix is not None else app_name.upper() + "_"
-    files = config_files if config_files is not None else default_config_files(app_name)
+    prefix = app_name.upper() + "_"
+    files = default_config_files(app_name, additional_files=config_files)
     p = configargparse.ArgParser(
         prog=prog or app_name,
         description=description,
@@ -110,46 +106,29 @@ def create_parser(
     p._jsonee_env_prefix = prefix
     p._jsonee_path_options: list[str] = []
 
-    if with_store:
-        p.add("--storage-path", env_var=prefix + "STORAGE_PATH",
-              default=default_storage_path,
-              help="directory for embedded secantusdb data; ignored "
-                   "when --mongo-uri is set")
-        p._jsonee_path_options.append("storage_path")
-        p.add("--mongo-uri", env_var=prefix + "MONGO_URI", default=None,
-              help="external MongoDB or FerretDB connection string")
-        p.add("--mongo-db", env_var=prefix + "MONGO_DB",
-              default=default_mongo_db,
-              help=f"database name (default {default_mongo_db!r})")
+    p.add("--storage-path", env_var=prefix + "STORAGE_PATH",
+          default=storage_path,
+          help="directory for embedded secantusdb data; ignored "
+               "when --mongo-uri is set")
+    p._jsonee_path_options.append("storage_path")
+    p.add("--mongo-uri", env_var=prefix + "MONGO_URI", default=None,
+          help="external MongoDB or FerretDB connection string")
+    p.add("--mongo-db", env_var=prefix + "MONGO_DB",
+          default=app_name,
+          help=f"database name (default {mongo_db!r})")
 
-    if with_http:
-        p.add("--bind", env_var=prefix + "BIND", default=default_bind,
-              help=f"host:port to listen on (default {default_bind!r})")
-        p.add("--base-url", env_var=prefix + "BASE_URL",
-              default=default_base_url,
-              help="public origin+path the service is served from; "
-                   "used for redirect URIs and post-redirect Location "
-                   "headers")
+    p.add("--bind", env_var=prefix + "BIND", default=bind,
+          help=f"host:port to listen on (default {bind!r})")
+    p.add("--base-url", env_var=prefix + "BASE_URL",
+          default="/",
+          help="public origin+path the service is served from; "
+               "used for redirect URIs and post-redirect Location "
+               "headers")
+    # TOdO: default to nr of cpu - 1
+    p.add("--max-workers", env_var=prefix + "WORKERS",
+          default=4,
+          help="Max number of background workers.")
 
     return p
 
 
-def parse(parser: configargparse.ArgParser,
-          argv: list[str] | None = None) -> dict[str, Any]:
-    """Parse argv and return a normalized config dict.
-
-    - Drops the ``config_file`` housekeeping key (it's an input to the
-      loader, not a runtime setting).
-    - Expands ``~`` in any option tagged as path-typed by
-      :func:`create_parser` (currently just ``storage_path``).
-
-    App-specific normalisation (fallback chains, derived defaults)
-    happens *after* this — apps own that logic since it depends on
-    their option set."""
-    ns = parser.parse_args(argv)
-    cfg = vars(ns).copy()
-    cfg.pop("config_file", None)
-    for key in getattr(parser, "_jsonee_path_options", ()):
-        if cfg.get(key):
-            cfg[key] = os.path.expanduser(cfg[key])
-    return cfg
