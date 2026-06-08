@@ -65,7 +65,7 @@ async def test_static_path_traversal_blocked(client):
 async def test_api_route_still_reachable_alongside_static(client):
     r = await client.get("/api/v3/ping")
     assert r.status_code == 200
-    assert r.json() == {"ok": True}
+    assert r.json()["data"] == {"ok": True}
 
 
 async def test_static_missing_file_404(client):

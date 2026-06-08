@@ -112,7 +112,7 @@ _EVENTS = (
 DEFERRED = None
 
 class JsonEE:
-    def __init__(self, app_name: str, prog: str | None = None, description: str = "", env_prefix: str | None = None, storage_path: str | None = None, mongo_db: str | None = None, bind: str = "127.0.0.1:8123", base_url: str = "", config_files: list[str] | None = None, schema_registry: dict|None = None):
+    def __init__(self, app_name: str = "JsonEE-App", prog: str | None = None, description: str = "", env_prefix: str | None = None, storage_path: str | None = None, mongo_db: str | None = None, bind: str = "127.0.0.1:8123", base_url: str = "", config_files: list[str] | None = None, schema_registry: dict|None = None):
 
 
         logging.basicConfig(
@@ -120,7 +120,7 @@ class JsonEE:
             format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         )
         self.log = logging
-        self.app_name = app_name or "jsonee_app"
+        self.app_name = app_name or "JsonEE-App"
         self.argparse = create_parser(app_name=self.app_name, prog=prog, description=description, env_prefix=env_prefix, storage_path=storage_path, mongo_db=mongo_db, bind=bind, base_url=base_url, config_files=config_files)
         self.routes = []
         self.schema_registry = dict(schema_registry or {})
