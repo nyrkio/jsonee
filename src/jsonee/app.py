@@ -17,6 +17,7 @@ from extjson import dumps, loads, validate, ValidationError
 
 from .config import create_parser
 from .store import open_store
+from .tasks import DurableTasks
 
 class HTTPError(Exception):
     def __init__(self, status, message, detail=None):
@@ -128,6 +129,10 @@ class JsonEE:
         self._static_mounts = []  # list of (url_prefix, abs_directory, default_file)
         self.cfg = {"init": "CLI arguments have not been parsed yet. Please call JsonEE.parse_args()"}
         self.app = DEFERRED
+        # Durable background tasks. Constructed here so apps can register
+        # task handlers during build (before start()); the store and the
+        # executor are read lazily. resume() runs in start(), once both exist.
+        self.tasks = DurableTasks(self)
 
 
     def parser(self):
@@ -177,6 +182,14 @@ class JsonEE:
         #  multiple http requests in parallel. But this is an ok start.
         self.background = ThreadPoolExecutor(
         max_workers=self.cfg["max_workers"], thread_name_prefix=f"{self.app_name}_bg_")
+
+        # Re-dispatch any background task a previous run left unfinished.
+        # Safe now that the executor exists and the app has registered its
+        # task handlers (build_app runs before start()).
+        try:
+            self.tasks.resume()
+        except Exception:
+            logging.exception("durable task resume failed")
 
         print(f"listening on http://{host}:{port}  "
               f"(base_url={self.cfg['base_url']})")

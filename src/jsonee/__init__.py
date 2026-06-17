@@ -1,10 +1,12 @@
 from .app import JsonEE, Request, Response, HTTPError
 from .store import MongoStore, Store, open_store
+from .tasks import DurableTasks
 from . import config
 
 __all__ = [
     "JsonEE", "Request", "Response", "HTTPError",
     "MongoStore", "Store", "open_store",
+    "DurableTasks",
     "config",
 ]
 

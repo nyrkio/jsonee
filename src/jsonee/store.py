@@ -43,6 +43,18 @@ class _MongoCollection:
     def insert_many(self, docs):
         return [self.insert_one(d) for d in docs]
 
+    def update_one(self, filter_, update, upsert=False):
+        """In-place update. ``update`` uses MongoDB operators ($set, $inc,
+        $setOnInsert, …). Returns the pymongo UpdateResult (carries
+        ``modified_count`` and ``upserted_id``). secantusdb speaks these
+        over the wire — there is no longer an in-memory store that couldn't."""
+        return self._coll.update_one(filter_ or {}, update, upsert=upsert)
+
+    def create_index(self, keys, unique=False, **kwargs):
+        """Create an index. ``keys`` is a list of (field, 1|-1) tuples.
+        Idempotent on the server side (same spec → same index name)."""
+        return self._coll.create_index(keys, unique=unique, **kwargs)
+
     def find_one(self, filter_=None):
         raw = self._coll.find_one(filter_ or {})
         return Document(raw) if raw is not None else None
